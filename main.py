@@ -20,16 +20,19 @@ logging.basicConfig(level=getattr(logging, log_level, logging.DEBUG))
 load_dotenv()
 
 class Rotary:
-    def __init__(self, name, on_pressed, on_rotate, pin_a, pin_b, button_pin, direction=1):
+    def __init__(self, name, on_press, on_hold, on_rotate, pin_a, pin_b, button_pin, direction=1, hold_time=0.5):
         self.name = name
-        self.button = gpiozero.Button(button_pin, pull_up=True)
+        self.button = gpiozero.Button(button_pin, hold_time=hold_time, pull_up=True)
         self.rot = gpiozero.RotaryEncoder(pin_a, pin_b, max_steps=0)
         self.direction = (direction == 1) and 1 or -1
-        self.on_pressed = on_pressed and on_pressed or self._noop
+        self.on_press = on_press and on_press or self._noop
+        self.on_hold = on_hold and on_hold or self._noop
         self.on_rotate = on_rotate and on_rotate or self._noop
 
         self.button.when_pressed = self._button_press
+        self.button.when_held = self._button_hold
         self.rot.when_rotated = self._rotate
+
 
     def _noop(self):
         return
@@ -38,7 +41,10 @@ class Rotary:
         self.on_rotate(self.name, self.rot.steps * self.direction)
 
     def _button_press(self):
-        self.on_pressed(self.name)
+        self.on_press(self.name)
+
+    def _button_hold(self):
+        self.on_hold(self.name, self.button.held_time)
 
 class SerialInterface(object):
     def __init__(self, port, baud, state_update_func=None):
@@ -68,8 +74,9 @@ class SerialInterface(object):
     def send_json_message(self, data, refresh_state=False):
         try:
             if refresh_state:
-                json_data['v'] = true
-            json_data = json.dumps(data)
+                data['v'] = True
+            json_data = json.dumps(data) + '\n'
+            logging.debug(json_data)
             self.ser.write((json_data).encode())
             logging.debug(f"Sent: {json_data}")
         except Exception as e:
@@ -90,8 +97,6 @@ class SerialInterface(object):
 
 class Main(object):
     def __init__(self):
-        self.hue = 0
-        self.hue_increment = float(os.getenv('HUE_INCREMENT', 0.05))
 
         # connect outputs
         self.led = neopixel.NeoPixel(getattr(board, os.getenv("LED_PIN")), int(os.getenv("LED_LENGTH")))
@@ -104,25 +109,39 @@ class Main(object):
         self.wled.send_json_message({"v": True})
         self.got_state.wait()
 
+        self.hue = 0
+        self.hue_increment = float(os.getenv('HUE_INCREMENT', 0.05))
+        self.fx = self.state['state']['seg'][0]['fx']  
+
         # connect inputs
-        self.encoder_a = Rotary('A', self.encoder_button_press, self.encoder_rotate, *self._scalarize(os.getenv("ENCODER_PINS_A")))
-        self.encoder_a = Rotary('B', self.encoder_button_press, self.encoder_rotate, *self._scalarize(os.getenv("ENCODER_PINS_B")))
+        self.encoder_a = Rotary('A', self.encoder_button_press, self.encoder_button_hold, self.encoder_rotate, *self._scalarize(os.getenv("ENCODER_PINS_A")), float(os.getenv("ENCODER_BUTTON_HOLD_TIME", 0.5)))
+        self.encoder_a = Rotary('B', self.encoder_button_press, self.encoder_button_hold, self.encoder_rotate, *self._scalarize(os.getenv("ENCODER_PINS_B")), float(os.getenv("ENCODER_BUTTON_HOLD_TIME", 0.5)))
 
     def _scalarize(self, x):
         return [int(y.strip()) for y in x.split(',')]
 
-    def encoder_button_press(self, encoder_name):
-        logging.debug(f'button - {encoder_name}')
+    def encoder_button_hold(self, encoder_name, held_time):
+        logging.debug(f'hold - {encoder_name} for {held_time}s')
 
         if encoder_name == 'A':
             self.state['state']['on'] = not self.state['state']['on']
-            self.wled.send_json_message({"on": self.state['state']['on']})
+            self.wled.send_json_message({"on": self.state['state']['on'], "tt": 5})
+
+    def encoder_button_press(self, encoder_name):
+        logging.debug(f'button - {encoder_name}')
+        if encoder_name == 'A':
+            self.fx = 0
+            self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "fx": self.fx}]})
 
     def encoder_rotate(self, encoder_name, steps):
         logging.debug(f'rotate - {encoder_name} / {steps}')
-        self.hue = (steps * self.hue_increment) % 1.0
-        c = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
-        self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "col": [c]}]})
+        if encoder_name == 'A':
+            self.hue = (steps * self.hue_increment) % 1.0
+            c = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
+            self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "col": [c]}]})
+        elif encoder_name == 'B':
+            self.fx = (self.fx + 1) % self.state['info']['fxcount']
+            self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "fx": self.fx}]})
 
     def update_state(self, data):
         self.state = data
