@@ -19,6 +19,6 @@ RUN apt-get install -y \
 
 RUN sudo apt-get install -y python3 python3-pip python3-dev git
 RUN sudo apt install -y python3-gpiozero
-RUN sudo pip3 install -y lgpio rpi_ws281x adafruit-circuitpython-neopixel python-dotenv pyserial PyAudio git+https://git.aubio.org/aubio/aubio/@152d6819b360c2e7b379ee3f373d444ab3df0895
+RUN sudo pip3 install -y lgpio rpi_ws281x adafruit-circuitpython-neopixel python-dotenv pyserial pyaudio git+https://git.aubio.org/aubio/aubio/
 RUN sudo python3 -m pip install --force-reinstall adafruit-blinka
 RUN rm -rf /var/lib/apt/lists/*
