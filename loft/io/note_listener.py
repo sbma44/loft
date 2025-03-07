@@ -58,7 +58,7 @@ class NoteListener:
     def _midi_to_pitch(self, midi_number):
         pitch_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         note = pitch_names[int(midi_number) % 12]
-        octave = (midi_number // 12) - 1
+        octave = int((midi_number // 12) - 1)
         return f"{note}{octave}"
 
     def listen(self):
