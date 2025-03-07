@@ -7,3 +7,4 @@ aubio==0.4.9
 numpy==1.26.4
 adafruit-circuitpython-neopixel==6.3.11
 board==1.0
+lgpio==0.2.2.0
