@@ -49,11 +49,18 @@ class NoteListener:
 
     def stop_audio(self):
         logging.debug('stopping stream...')
-        self.stream.stop_stream()
-        while not self.stream.is_stopped():
-            time.sleep(0.1)
-        self.stream.close()
-        self.p.terminate()
+        try:
+            if not self.stream.is_stopped():
+                self.stream.stop_stream()
+            while not self.stream.is_stopped():
+                time.sleep(0.1)
+            self.stream.close()
+            self.p.terminate()
+        except:
+            self.stream = None
+            self.p = None
+        finally:
+            gc.collect()
 
     def _midi_to_pitch(self, midi_number):
         pitch_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
