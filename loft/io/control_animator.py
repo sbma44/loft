@@ -21,7 +21,10 @@ class ControlAnimator:
         self.index = 0
         self.animation = animation
         self.loop = loop
-        self.pause.notify()
+
+        # Acquire the condition before notifying
+        with self.pause:
+            self.pause.notify()
 
     def blank(self):
         self.set_animation([[[self.BLACK * len(self.leds)], 1.0]], loop=False)
@@ -42,4 +45,5 @@ class ControlAnimator:
 
                 time.sleep(delay)
             else:
-                self.pause.wait()
+                with self.pause:
+                    self.pause.wait()
