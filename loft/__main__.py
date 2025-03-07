@@ -11,7 +11,7 @@ import neopixel
 
 from dotenv import load_dotenv
 
-from .io import NoteListener, Rotary, SerialInterface
+from .io import NoteListener, Rotary, SerialInterface, ControlAnimator
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'DEBUG').upper()
@@ -47,6 +47,8 @@ class Main:
         # connect outputs
         self.led = neopixel.NeoPixel(getattr(board, os.getenv("LED_PIN")), int(os.getenv("LED_LENGTH")))
         self.wled = SerialInterface(os.getenv("SERIAL_PORT"), os.getenv("SERIAL_BAUD"), self.state_callback)
+        self.control_animator = ControlAnimator(self.led)
+        self.control_animator.set_animation([[[self.control_animator.RED * len(self.led)], 1.0], [[self.control_animator.BLACK * len(self.led)], 0.5]])
 
         # reboot wled
         self.finished_reboot = threading.Event()
