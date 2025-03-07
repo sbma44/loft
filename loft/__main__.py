@@ -37,6 +37,13 @@ class Main:
         for i in range(color_steps):
             self.colors.append([int(x * 255) for x in colorsys.hsv_to_rgb(i / color_steps, 1.0, 1.0)])
 
+        # load enabled fx
+        with open('effect_selections.json', 'r') as f:
+            selected = json.load(f)
+            for fx_i in selected:
+                if selected[fx_i]:
+                    self.enabled_fx.append(int(fx_i))
+
         # connect outputs
         self.led = neopixel.NeoPixel(getattr(board, os.getenv("LED_PIN")), int(os.getenv("LED_LENGTH")))
         self.wled = SerialInterface(os.getenv("SERIAL_PORT"), os.getenv("SERIAL_BAUD"), self.state_callback)
@@ -93,10 +100,12 @@ class Main:
         self.command_queue.appendleft(command)
 
         # only consider last 3 commands in the last 3 seconds
+        lookback = 3
         time_threshold = time.time() - 3
-        last_3s = [x for (i, x) in enumerate(self.command_queue) if i < 3 and x[1] > time_threshold]
-        print(last_3s)
-        if len(last_3s) == 3:
+        last_3s = [x for (i, x) in enumerate(self.command_queue) if i < lookback and x[1] > time_threshold]
+
+        # if we don't have 3 commands in last 3s, ignore the following
+        if len(last_3s) == lookback:
             # check for continuous events: note, solid, fx
             if all(item[0] == 'NOTE' for item in last_3s):
                 self.set_mode('NOTE')
@@ -138,7 +147,7 @@ class Main:
         if encoder_name == 'A':
             self.set_mode('SOLID')
 
-    def encoder_rotate(self, encoder_name, steps):
+    def encoder_rotate(self, encoder_name, steps, last_steps):
         logging.debug(f'rotate - {encoder_name} / {steps}')
 
         self.log_command((f'ROTATE', time.time(), encoder_name, steps))
@@ -147,7 +156,8 @@ class Main:
             self.hue = (steps * self.hue_increment) % 1.0
             self.send_color()
         elif encoder_name == 'B' and self.mode == 'FX':
-            self.fx = (self.fx + 1) % self.state['info']['fxcount']
+            fx_index = self.fx in self.enabled_fx and self.enabled_fx.index(self.fx) or 0
+            self.fx = self.enabled_fx[(self.fx_index + (steps - last_steps)) % len(self.enabled_fx)]
             self.send_fx()
 
     def state_callback(self, state=False, non_state_message=False):

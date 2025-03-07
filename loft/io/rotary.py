@@ -14,11 +14,14 @@ class Rotary:
         self.button.when_held = self._button_hold
         self.rot.when_rotated = self._rotate
 
+        self.last_steps = 0
+
     def _noop(self):
         return
 
     def _rotate(self):
-        self.on_rotate(self.name, self.rot.steps * self.direction)
+        self.on_rotate(self.name, self.rot.steps * self.direction, self.last_steps)
+        self.last_steps = self.rot.steps * self.direction
 
     def _button_press(self):
         self.on_press(self.name)
