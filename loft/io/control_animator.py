@@ -8,11 +8,10 @@ class ControlAnimator:
 
     def __init__(self, leds):
         self.leds = leds
+        self.pause = threading.Condition()
 
         self.blank()
         self.index = 0
-
-        self.pause = threading.Condition()
 
         self.thread = threading.Thread(target=self._animate)
         self.thread.start()
