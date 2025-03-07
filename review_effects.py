@@ -79,7 +79,7 @@ class EffectReviewer:
                     print("Invalid input. Please try again.")
             
             # Small delay to let the effect be visible
-            time.sleep(2)
+            time.sleep(0.2)
         
         print("\nReview complete! All effects have been evaluated.")
         print(f"Selected effects: {sum(1 for v in self.selections.values() if v)}")
