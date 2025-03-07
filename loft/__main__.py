@@ -38,7 +38,9 @@ class Main:
             self.colors.append([int(x * 255) for x in colorsys.hsv_to_rgb(i / color_steps, 1.0, 1.0)])
 
         # load enabled fx
-        with open('effect_selections.json', 'r') as f:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        selections_file = os.path.join(script_dir, 'effect_selections.json')
+        with open(selections_file, 'r') as f:
             selected = json.load(f)
             for fx_i in selected:
                 if selected[fx_i]:
