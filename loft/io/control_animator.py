@@ -26,7 +26,10 @@ class ControlAnimator:
             self.pause.notify()
 
     def blank(self):
-        self.set_animation([[[self.BLACK * len(self.leds)], 1.0]], loop=False)
+        accum = []
+        for i in range(len(self.leds)):
+            accum.append(self.BLACK)
+        self.set_animation([[accum, 1.0]], loop=False)
 
     def _animate(self):
         while True:

@@ -40,6 +40,7 @@ class Main:
         # load enabled fx
         script_dir = os.path.dirname(os.path.abspath(__file__))
         selections_file = os.path.join(script_dir, 'effect_selections.json')
+        self.enabled_fx = []
         with open(selections_file, 'r') as f:
             selected = json.load(f)
             for fx_i in selected:
@@ -50,7 +51,6 @@ class Main:
         self.led = neopixel.NeoPixel(getattr(board, os.getenv("LED_PIN")), int(os.getenv("LED_LENGTH")))
         self.wled = SerialInterface(os.getenv("SERIAL_PORT"), os.getenv("SERIAL_BAUD"), self.state_callback)
         self.control_animator = ControlAnimator(self.led)
-        self.control_animator.set_animation([[[self.control_animator.RED * len(self.led)], 1.0], [[self.control_animator.BLACK * len(self.led)], 0.5]])
 
         # reboot wled
         self.finished_reboot = threading.Event()
@@ -161,7 +161,7 @@ class Main:
             self.send_color()
         elif encoder_name == 'B' and self.mode == 'FX':
             fx_index = self.fx in self.enabled_fx and self.enabled_fx.index(self.fx) or 0
-            self.fx = self.enabled_fx[(self.fx_index + (steps - last_steps)) % len(self.enabled_fx)]
+            self.fx = self.enabled_fx[(fx_index + (steps - last_steps)) % len(self.enabled_fx)]
             self.send_fx()
 
     def state_callback(self, state=False, non_state_message=False):
