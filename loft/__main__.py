@@ -24,11 +24,12 @@ class Main:
         self.last_action = None
 
         self.command_queue = collections.deque([], maxlen=50)
-        self.mode = 'SOLID'
+        self.mode = None
+        self.segment_mode = False
 
         # set up notes, array to track state of each segment
         self.notes = os.getenv("NOTES", "").split(',')
-        self.segment_colors = [0] * len(self.notes)
+        self.segment_colors = [-1] * len(self.notes)
 
         # pregenerate colors that note-playing will cycle through
         self.colors = []
@@ -67,35 +68,41 @@ class Main:
         self.listener = NoteListener(float(os.getenv('SOUND_THRESHOLD_DB', -40)), self.note_callback)
 
         # send initial state to WLED
-        self.send_solid()
+        self.set_mode('SOLID')
+        self.send_color()
 
     def set_mode(self, mode):
         if mode == self.mode:
             return
 
+        logging.debug(f'setting mode to {mode}')
         self.mode = mode
 
         if self.mode == 'NOTE':
-            # set up segments, resend their state to the WLED
+            # set up segments, blank them, resend their state to the WLED
+            self.segment_colors = [-1] * len(self.segment_colors)
             self.set_segment_mode(True)
-            self.send_segments_to_wled()
+            self.send_segments()
         else:
             self.set_segment_mode(False)
+            if self.mode == 'SOLID':
+                self.fx = 0
+                self.send_fx()
 
     def log_command(self, command):
-        self.command_queue.append(command)
+        self.command_queue.appendleft(command)
 
         # only consider last 3 commands in the last 3 seconds
-        last_3s = [x for x in self.command_queue[-3:] if x[1] > time.time() - 3]
+        time_threshold = time.time() - 3
+        last_3s = [x for (i, x) in enumerate(self.command_queue) if i < 3 and x[1] > time_threshold]
+        print(last_3s)
         if len(last_3s) == 3:
             # check for continuous events: note, solid, fx
             if all(item[0] == 'NOTE' for item in last_3s):
                 self.set_mode('NOTE')
-            if all(item[0] == 'ROTATE' for item in last_3s):
-                if last_3s[0][2] == 'A':
-                    self.set_mode('SOLID')
-                else:
-                    self.set_mode('FX')
+            # all rotation events?
+            if all(item[0] == 'ROTATE' and item[2] == 'B' for item in last_3s):
+                self.set_mode('FX')
 
     def _scalarize(self, x):
         return [int(y.strip()) for y in x.split(',')]
@@ -128,15 +135,17 @@ class Main:
     def encoder_button_press(self, encoder_name):
         logging.debug(f'button - {encoder_name}')
         self.log_command((f'BUTTON', time.time(), encoder_name))
+        if encoder_name == 'A':
+            self.set_mode('SOLID')
 
     def encoder_rotate(self, encoder_name, steps):
         logging.debug(f'rotate - {encoder_name} / {steps}')
 
         self.log_command((f'ROTATE', time.time(), encoder_name, steps))
 
-        if encoder_name == 'A' and self.mode == 'SOLID':
+        if encoder_name == 'A' and self.mode in ('SOLID', 'FX'):
             self.hue = (steps * self.hue_increment) % 1.0
-            self.send_solid()
+            self.send_color()
         elif encoder_name == 'B' and self.mode == 'FX':
             self.fx = (self.fx + 1) % self.state['info']['fxcount']
             self.send_fx()
@@ -156,7 +165,7 @@ class Main:
         if note in self.notes:
             note_index = len(self.notes) - (self.notes.index(note) + 1)
             self.segment_colors[note_index] = (self.segment_colors[note_index] + 1) % len(self.colors)
-            self.send_segments_to_wled(note_index)
+            self.send_segments(note_index)
 
     def send_segments(self, segment_index=None):
         if segment_index is None:
@@ -166,14 +175,15 @@ class Main:
 
         segs = []
         for i in segments:
-            segs.append({"id": i + 1, "start": self.leds_per_segment * i, "stop": self.leds_per_segment * (i + 1) - 1, "col": [self.colors[self.segment_colors[i]]]})
+            c = (self.segment_colors[i] < 0) and [0, 0, 0] or self.colors[self.segment_colors[i]]
+            segs.append({"id": i + 1, "start": self.leds_per_segment * i, "stop": self.leds_per_segment * (i + 1), "col": [c]})
 
         self.wled.send_json_message({"tt": 0, "seg": segs})
 
     def send_fx(self):
         self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "fx": self.fx}]})
 
-    def send_solid(self):
+    def send_color(self):
         c = [int(x * 255) for x in colorsys.hsv_to_rgb(self.hue, 1.0, 1.0)]
         self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "start": 0, "stop": self.led_count - 1, "col": [c]}]})
 
