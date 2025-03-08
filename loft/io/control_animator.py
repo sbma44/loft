@@ -30,7 +30,8 @@ class ControlAnimator:
         self.set_animation([[self.get_solid_color_hsv([0, 0, 0]), 0]], loop=False)
 
     def get_solid_color_hsv(self, hsv):
-        return [[int(x * 255) for x in colorsys.hsv_to_rgb(hsv[0], hsv[1], hsv[2])] * len(self.leds)]
+        c = [int(x * 255) for x in colorsys.hsv_to_rgb(hsv[0], hsv[1], hsv[2])]  
+        return [c] * len(self.leds)
 
     def _animate(self):
         while True:

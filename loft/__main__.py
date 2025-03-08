@@ -62,7 +62,8 @@ class Main:
         logging.debug('requesting system state...')
         self.got_state = threading.Event()
         self.state = {}
-        self.wled.send_json_message({"on": False, "v": True})
+        self.power_on = False
+        self.set_power_state(self.power_on)
         self.got_state.wait()
 
         self.hue = 0
@@ -101,6 +102,9 @@ class Main:
                 self.send_fx()
 
     def log_command(self, command):
+        if not self.power_on:
+            return
+
         self.command_queue.appendleft(command)
 
         # only consider last 3 commands in the last 3 seconds
@@ -136,16 +140,22 @@ class Main:
                 # no need to set up segment 0, it's always there
                 pass
 
+    def set_power_state(self, power_state):
+        self.power_on = power_state
+        control_color = [0, 0, 0] if self.power_on else [0.7, 0.2, 0.3]
+        animation = self.control_animator.get_solid_color_hsv(control_color)
+        logging.debug(f'setting control color to {animation}')
+        self.control_animator.set_animation([[self.control_animator.get_solid_color_hsv(control_color), 0]], loop=False)
+        self.wled.send_json_message({"on": self.power_on, "tt": 5, "v": True})
+
     def encoder_button_hold(self, encoder_name, held_time):
         logging.debug(f'hold - {encoder_name} for {held_time}s')
 
+        if encoder_name == 'A':
+            self.set_power_state(not self.power_on)
+
         self.log_command((f'HOLD', time.time(), encoder_name))
 
-        if encoder_name == 'A':
-            self.state['state']['on'] = not self.state['state']['on']
-            self.wled.send_json_message({"on": self.state['state']['on'], "tt": 5})
-            control_color = [0, 0, 0] if self.state['state']['on'] else [1, 0, 0.3]
-            self.control_animator.set_animation([self.control_animator.get_solid_color_hsv(control_color), 0], loop=False)
 
     def encoder_button_press(self, encoder_name):
         logging.debug(f'button - {encoder_name}')
