@@ -142,10 +142,13 @@ class Main:
 
     def set_power_state(self, power_state):
         self.power_on = power_state
-        control_color = [0, 0, 0] if self.power_on else [0.7, 0.2, 0.3]
-        animation = self.control_animator.get_solid_color_hsv(control_color)
+        #control_color = [0, 0, 0] if self.power_on else [0.7, 0.2, 0.3]
+        animation = self.control_animator.get_solid_color_hsv([0, 0, 0])
+        if not self.power_on:
+            animation[2] = [5, 0, 0]
+            animation[3] = [5, 0, 0]
         logging.debug(f'setting control color to {animation}')
-        self.control_animator.set_animation([[self.control_animator.get_solid_color_hsv(control_color), 0]], loop=False)
+        self.control_animator.set_animation([[animation, 0]], loop=False)
         self.wled.send_json_message({"on": self.power_on, "tt": 5, "v": True})
 
     def encoder_button_hold(self, encoder_name, held_time):
