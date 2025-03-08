@@ -144,6 +144,8 @@ class Main:
         if encoder_name == 'A':
             self.state['state']['on'] = not self.state['state']['on']
             self.wled.send_json_message({"on": self.state['state']['on'], "tt": 5})
+            control_color = [0, 0, 0] if self.state['state']['on'] else [1, 0, 0.3]
+            self.control_animator.set_animation([self.control_animator.get_solid_color_hsv(control_color), 0], loop=False)
 
     def encoder_button_press(self, encoder_name):
         logging.debug(f'button - {encoder_name}')
