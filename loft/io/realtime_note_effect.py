@@ -99,8 +99,9 @@ class RealtimeNoteEffect:
     CHECK_INTERVAL = 10
     NOTE_DECAY_S = 3.0
     BLACK = (0, 0, 0)
+    MAX_FPS = 60  # Maximum frames per second
 
-    def __init__(self, hostname, colors, leds_per_segment):
+    def __init__(self, hostname, colors, leds_per_segment, max_fps=MAX_FPS):
         # resolve hostname
         self.hostname = hostname
         try:
@@ -114,6 +115,8 @@ class RealtimeNoteEffect:
         self.num_segments = len(self.colors)
         self.leds_per_segment = leds_per_segment
         self.num_leds = self.num_segments * self.leds_per_segment
+        self.max_fps = max_fps
+        self.frame_time = 1.0 / self.max_fps  # Time per frame in seconds
 
         self.parent_conn, self.child_conn = multiprocessing.Pipe()
         self._process = multiprocessing.Process(target=self._loop, args=(self.child_conn,))
@@ -157,7 +160,11 @@ class RealtimeNoteEffect:
         self.ba = MultiByteArray(self.num_leds, self.leds_per_segment)
 
         loop_i = 0
+        last_frame_time = time.time()
+
         while True:
+            frame_start_time = time.time()
+
             if self.state == 'SLEEP':
                 time.sleep(0.01)
             elif self.state == 'STOP':
@@ -185,9 +192,6 @@ class RealtimeNoteEffect:
                 except (socket.error, BlockingIOError) as e:
                     print(f"Socket error: {e}")
 
-                # Small sleep to avoid CPU hogging
-                time.sleep(0.01)
-
             # check for messages every CHECK_INTERVAL loops
             if (loop_i % self.CHECK_INTERVAL) == 0:
                 if child_conn.poll():
@@ -197,8 +201,23 @@ class RealtimeNoteEffect:
                         self.state = msg[1]
                     elif msg[0] == 'NOTE':
                         self.note_onsets[msg[1]] = time.time()
+
+            # Calculate how long this frame took
+            frame_end_time = time.time()
+            frame_duration = frame_end_time - frame_start_time
+
+            # Sleep to maintain the desired frame rate
+            sleep_time = max(0, self.frame_time - frame_duration)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+            # Calculate actual FPS for debugging if needed
+            actual_frame_time = time.time() - frame_start_time
+            actual_fps = 1.0 / actual_frame_time if actual_frame_time > 0 else 0
+
+            print(actual_fps)
+
             loop_i += 1
-            print(time.time(), loop_i)
 
     def send_note(self, note_index):
         """Send a note event to the effect process"""
@@ -209,6 +228,12 @@ class RealtimeNoteEffect:
         """Set the state of the effect process (e.g., 'ACTIVE', 'SLEEP')"""
         if self._running:
             self.parent_conn.send(('STATE', state))
+
+    def set_max_fps(self, max_fps):
+        """Update the maximum frames per second"""
+        self.max_fps = max_fps
+        self.frame_time = 1.0 / self.max_fps
+        self.parent_conn.send(('FPS', self.max_fps))
 
 # Example usage
 if __name__ == "__main__":
