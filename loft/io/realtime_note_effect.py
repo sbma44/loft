@@ -3,50 +3,154 @@ import math
 import colorsys
 import multiprocessing
 import socket
+import statistics
+import os
+import random
+import sys
+import termios
+import tty
+from collections import deque
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+def color_animation(hue, progress, peak_position=0.2):
+    """
+    Generate an RGB color for an animation that transitions from white to a fully saturated color to black.
+
+    Args:
+        hue (float): The hue value (0.0-1.0) for the color
+        progress (float): The progress through the animation (0.0-1.0)
+        peak_position (float): The position in the animation where the fully saturated color appears (0.0-1.0)
+
+    Returns:
+        tuple: RGB values as integers (0-255)
+
+    The animation follows this sequence:
+    - At progress=0.0: Full white (255, 255, 255)
+    - At progress=peak_position: Fully saturated, fully bright version of the hue
+    - At progress=1.0: Full black (0, 0, 0)
+    """
+    if progress <= 0:
+        # Start with white
+        return (255, 255, 255)
+    elif progress >= 1:
+        # End with black
+        return (0, 0, 0)
+
+    # Normalize the peak position to ensure it's between 0 and 1
+    peak_position = max(0.01, min(0.99, peak_position))
+
+    if progress < peak_position:
+        # Phase 1: White to fully saturated color
+        # Calculate how far we are in this phase (0.0 to 1.0)
+        phase_progress = progress / peak_position
+
+        # Convert the target hue to RGB
+        target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+
+        # Interpolate from white (255, 255, 255) to the target color
+        r = int(255 - (phase_progress * (255 - target_r)))
+        g = int(255 - (phase_progress * (255 - target_g)))
+        b = int(255 - (phase_progress * (255 - target_b)))
+
+        return (r, g, b)
+    else:
+        # Phase 2: Fully saturated color to black
+        # Calculate how far we are in this phase (0.0 to 1.0)
+        phase_progress = (progress - peak_position) / (1 - peak_position)
+
+        # Convert the target hue to RGB
+        target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+
+        # Interpolate from the target color to black (0, 0, 0)
+        r = int(target_r * (1 - phase_progress))
+        g = int(target_g * (1 - phase_progress))
+        b = int(target_b * (1 - phase_progress))
+
+        return (r, g, b)
 
 class MultiByteArray:
     def __init__(self, num_leds, segment_size):
         self.segment_size = segment_size
         self.num_leds = num_leds
+        self.MAX_UDP_PAYLOAD = 1300  # Maximum UDP payload size in bytes
 
-        MAX_UDP_SIZE = 1300  # bytes
-        required_bytearrays = math.ceil((3 * self.num_leds) / MAX_UDP_SIZE)
-        self.bytearrays = [bytearray(round(3 * self.num_leds / required_bytearrays))]
-        for i in range(len(self.bytearrays)):
-            self.bytearrays[i].extend([0] * (len(self.bytearrays[i])))
+        # Create a single bytearray for all LEDs (3 bytes per LED for RGB)
+        self.data = bytearray(3 * self.num_leds)
 
-        self.bytearray_starts = [0]
-        for i in range(len(self.bytearrays) - 1):
-            self.bytearray_starts.append(len(self.bytearrays[i]))
+        # Calculate how many LEDs can fit in each UDP packet
+        # Each LED uses 3 bytes (RGB), and we need 4 bytes for the header
+        self.leds_per_packet = (self.MAX_UDP_PAYLOAD - 4) // 3
+
+        # Calculate how many packets we'll need
+        self.num_packets = math.ceil(self.num_leds / self.leds_per_packet)
 
     def __iter__(self):
-        # Yield each bytearray with 4 byte header prepended
-        for (i, ba) in enumerate(self.bytearrays):
-            # Create new bytearray with 4 byte header + data
-            start_index = int(self.bytearray_starts[i] / 3)  # Convert to int first
-            start_index_high_byte = (start_index >> 8) & 0xFF  # Get high byte
-            start_index_low_byte = start_index & 0xFF  # Get low byte
+        # Yield slices of the bytearray with appropriate headers
+        for packet_index in range(self.num_packets):
+            # Calculate the starting LED index for this packet
+            start_led = packet_index * self.leds_per_packet
 
-            with_header = bytearray([4, 2, start_index_high_byte, start_index_low_byte])
-            with_header.extend(ba)
-            yield with_header
+            # Calculate how many LEDs to include in this packet
+            leds_in_packet = min(self.leds_per_packet, self.num_leds - start_led)
+
+            # Create the 4-byte header
+            # Byte 0: 4 (DRGB protocol identifier)
+            # Byte 1: 2 (protocol version)
+            # Bytes 2-3: Starting LED index (high byte, low byte)
+            start_index_high_byte = (start_led >> 8) & 0xFF
+            start_index_low_byte = start_led & 0xFF
+            header = bytearray([4, 2, start_index_high_byte, start_index_low_byte])
+
+            # Calculate byte indices in the data array
+            start_byte = start_led * 3
+            end_byte = start_byte + (leds_in_packet * 3)
+
+            # Create packet with header + data slice
+            packet = bytearray(header)
+            packet.extend(self.data[start_byte:end_byte])
+
+            yield packet
 
     def __getitem__(self, index):
-        # Find which bytearray contains this index
-        byte_index = index * 3  # Each LED uses 3 bytes (RGB)
-        array_index = 0
-        while array_index < len(self.bytearray_starts) - 1 and byte_index >= self.bytearray_starts[array_index + 1]:
-            array_index += 1
+        # Handle single index
+        if isinstance(index, int):
+            if index < 0 or index >= self.num_leds:
+                raise IndexError("LED index out of range")
 
-        # Get the relative position within that bytearray
-        relative_pos = byte_index - self.bytearray_starts[array_index]
+            # Calculate position in bytearray (3 bytes per LED)
+            pos = index * 3
 
-        # Return RGB values as tuple
-        return (
-            self.bytearrays[array_index][relative_pos],
-            self.bytearrays[array_index][relative_pos + 1],
-            self.bytearrays[array_index][relative_pos + 2]
-        )
+            # Return RGB values as tuple
+            return (
+                self.data[pos],
+                self.data[pos + 1],
+                self.data[pos + 2]
+            )
+
+        # Handle slice
+        elif isinstance(index, slice):
+            start = index.start if index.start is not None else 0
+            stop = index.stop if index.stop is not None else self.num_leds
+            step = index.step if index.step is not None else 1
+
+            # Create a list of RGB tuples for the slice
+            result = []
+            for i in range(start, stop, step):
+                if i < 0 or i >= self.num_leds:
+                    raise IndexError("LED index out of range")
+                pos = i * 3
+                result.append((
+                    self.data[pos],
+                    self.data[pos + 1],
+                    self.data[pos + 2]
+                ))
+            return result
+
+        else:
+            raise TypeError("Index must be int or slice")
 
     def __setitem__(self, index, value):
         # Handle slice
@@ -55,53 +159,95 @@ class MultiByteArray:
             stop = index.stop if index.stop is not None else self.num_leds
             step = index.step if index.step is not None else 1
 
-            if not isinstance(value, (tuple, list)):
-                raise ValueError("Value must be list of RGB tuples/lists for slice assignment")
-
             indices = range(start, stop, step)
+
+            # Check if value is a single RGB tuple to be applied to all LEDs in the slice
+            if isinstance(value, (tuple, list)) and len(value) == 3 and all(isinstance(x, int) for x in value):
+                for i in indices:
+                    if i < 0 or i >= self.num_leds:
+                        raise IndexError("LED index out of range")
+                    pos = i * 3
+                    self.data[pos] = value[0]
+                    self.data[pos + 1] = value[1]
+                    self.data[pos + 2] = value[2]
+                return
+
+            # Otherwise, value should be a list of RGB tuples
+            if not isinstance(value, (tuple, list)):
+                raise ValueError("Value must be RGB tuple or list of RGB tuples")
+
             if len(value) != len(indices):
-                raise ValueError("Value list length must match slice length")
+                raise ValueError(f"Value list length ({len(value)}) must match slice length ({len(indices)})")
 
             for i, v in zip(indices, value):
                 if not isinstance(v, (tuple, list)) or len(v) != 3:
                     raise ValueError("Each value must be RGB tuple/list of 3 elements")
-                self._set_single_item(i, v)
+                if i < 0 or i >= self.num_leds:
+                    raise IndexError("LED index out of range")
+
+                pos = i * 3
+                self.data[pos] = v[0]
+                self.data[pos + 1] = v[1]
+                self.data[pos + 2] = v[2]
             return
 
         # Handle single index
-        if not isinstance(value, (tuple, list)) or len(value) != 3:
-            raise ValueError("Value must be RGB tuple/list of 3 elements")
-        self._set_single_item(index, value)
+        if isinstance(index, int):
+            if index < 0 or index >= self.num_leds:
+                raise IndexError("LED index out of range")
 
-    def _set_single_item(self, index, value):
-        # Find which bytearray contains this index
-        byte_index = index * 3  # Each LED uses 3 bytes
-        array_index = 0
-        while array_index < len(self.bytearray_starts) - 1 and byte_index >= self.bytearray_starts[array_index + 1]:
-            array_index += 1
+            if not isinstance(value, (tuple, list)) or len(value) != 3:
+                raise ValueError("Value must be RGB tuple/list of 3 elements")
 
-        # Get the relative position within that bytearray
-        relative_pos = byte_index - self.bytearray_starts[array_index]
-
-        # Set RGB values
-        self.bytearrays[array_index][relative_pos] = value[0]
-        self.bytearrays[array_index][relative_pos + 1] = value[1]
-        self.bytearrays[array_index][relative_pos + 2] = value[2]
+            pos = index * 3
+            self.data[pos] = value[0]
+            self.data[pos + 1] = value[1]
+            self.data[pos + 2] = value[2]
+        else:
+            raise TypeError("Index must be int or slice")
 
     def set_segment(self, segment_index, color):
-        segment_colors = [color] * self.segment_size
+        """Set all LEDs in a segment to the same color"""
+        if segment_index < 0 or segment_index >= (self.num_leds // self.segment_size):
+            raise IndexError("Segment index out of range")
+
         start = segment_index * self.segment_size
-        stop = (segment_index + 1) * self.segment_size
-        self[start:stop] = segment_colors
+        stop = min((segment_index + 1) * self.segment_size, self.num_leds)
+
+        # Set all LEDs in the segment to the same color
+        for i in range(start, stop):
+            pos = i * 3
+            self.data[pos] = color[0]
+            self.data[pos + 1] = color[1]
+            self.data[pos + 2] = color[2]
 
 class RealtimeNoteEffect:
-    UDP_PORT_NO = 21324
-    CHECK_INTERVAL = 10
-    NOTE_DECAY_S = 3.0
+    # Default values for configuration (used if not in .env)
     BLACK = (0, 0, 0)
-    MAX_FPS = 60  # Maximum frames per second
+    MAX_HISTORY_SIZE = 1000  # Maximum number of FPS samples to keep
 
-    def __init__(self, hostname, colors, leds_per_segment, max_fps=MAX_FPS):
+    def __init__(self, hostname, udp_port, hues, leds_per_segment, max_fps=None):
+        """
+        Initialize the realtime note effect.
+
+        Args:
+            hostname: The hostname or IP address of the WLED device
+            hues: List of hue values (0.0-1.0) for each segment
+            leds_per_segment: Number of LEDs per segment
+            max_fps: Maximum frames per second (overrides env value if provided)
+        """
+        # Load configuration from environment variables
+        self.udp_port = udp_port
+        self.note_decay_s = float(os.getenv('NOTE_DECAY_S', '3.0'))
+
+        # Allow max_fps to be overridden by parameter, otherwise use env value
+        if max_fps is None:
+            self.max_fps = int(os.getenv('MAX_FPS', '60'))
+        else:
+            self.max_fps = max_fps
+
+        self.frame_time = 1.0 / self.max_fps  # Time per frame in seconds
+
         # resolve hostname
         self.hostname = hostname
         try:
@@ -111,17 +257,22 @@ class RealtimeNoteEffect:
             self.ip_address = None
             print(f"Could not resolve hostname: {hostname}")
 
-        self.colors = colors
-        self.num_segments = len(self.colors)
+        # Validate hues
+        for hue in hues:
+            if not 0 <= hue <= 1.0:
+                raise ValueError(f"Hue value {hue} is outside the valid range of 0.0-1.0")
+
+        self.hues = hues
+        self.num_segments = len(self.hues)
         self.leds_per_segment = leds_per_segment
         self.num_leds = self.num_segments * self.leds_per_segment
-        self.max_fps = max_fps
-        self.frame_time = 1.0 / self.max_fps  # Time per frame in seconds
 
+        # Create a pipe for bidirectional communication
         self.parent_conn, self.child_conn = multiprocessing.Pipe()
         self._process = multiprocessing.Process(target=self._loop, args=(self.child_conn,))
         self._process.daemon = True
         self._running = False
+        self.avg_fps = 0
 
     def start(self):
         """Start the effect processing in a separate process"""
@@ -135,13 +286,87 @@ class RealtimeNoteEffect:
             self._process.join()
 
     def stop(self):
-        """Stop the effect processing"""
+        """Stop the effect processing and report average FPS"""
         if self._running:
+            # Request FPS stats before stopping
+            self.parent_conn.send(('GET_FPS_STATS', None))
+
+            # Wait for response with timeout
+            if self.parent_conn.poll(1.0):
+                response = self.parent_conn.recv()
+                if response[0] == 'FPS_STATS':
+                    fps_stats = response[1]
+                    if fps_stats['active_frames'] > 0:
+                        print(f"\nFPS Statistics:")
+                        print(f"  Average FPS: {fps_stats['avg_fps']:.2f}")
+                        print(f"  Min FPS: {fps_stats['min_fps']:.2f}")
+                        print(f"  Max FPS: {fps_stats['max_fps']:.2f}")
+                        print(f"  Active frames: {fps_stats['active_frames']}")
+                        print(f"  Total frames: {fps_stats['total_frames']}")
+                        self.avg_fps = fps_stats['avg_fps']
+
+            # Send stop signal
             self.parent_conn.send(('STATE', 'STOP'))
             self._process.join(timeout=1.0)
             if self._process.is_alive():
                 self._process.terminate()
             self._running = False
+
+    def color_animation(self, hue, progress, peak_position=0.2):
+        """
+        Generate an RGB color for an animation that transitions from white to a fully saturated color to black.
+
+        Args:
+            hue (float): The hue value (0.0-1.0) for the color
+            progress (float): The progress through the animation (0.0-1.0)
+            peak_position (float): The position in the animation where the fully saturated color appears (0.0-1.0)
+
+        Returns:
+            tuple: RGB values as integers (0-255)
+
+        The animation follows this sequence:
+        - At progress=0.0: Full white (255, 255, 255)
+        - At progress=peak_position: Fully saturated, fully bright version of the hue
+        - At progress=1.0: Full black (0, 0, 0)
+        """
+        if progress <= 0:
+            # Start with white
+            return (255, 255, 255)
+        elif progress >= 1:
+            # End with black
+            return (0, 0, 0)
+
+        # Normalize the peak position to ensure it's between 0 and 1
+        peak_position = max(0.01, min(0.99, peak_position))
+
+        if progress < peak_position:
+            # Phase 1: White to fully saturated color
+            # Calculate how far we are in this phase (0.0 to 1.0)
+            phase_progress = progress / peak_position
+
+            # Convert the target hue to RGB
+            target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+
+            # Interpolate from white (255, 255, 255) to the target color
+            r = int(255 - (phase_progress * (255 - target_r)))
+            g = int(255 - (phase_progress * (255 - target_g)))
+            b = int(255 - (phase_progress * (255 - target_b)))
+
+            return (r, g, b)
+        else:
+            # Phase 2: Fully saturated color to black
+            # Calculate how far we are in this phase (0.0 to 1.0)
+            phase_progress = (progress - peak_position) / (1 - peak_position)
+
+            # Convert the target hue to RGB
+            target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+
+            # Interpolate from the target color to black (0, 0, 0)
+            r = int(target_r * (1 - phase_progress))
+            g = int(target_g * (1 - phase_progress))
+            b = int(target_b * (1 - phase_progress))
+
+            return (r, g, b)
 
     def _loop(self, child_conn):
         # set up socket
@@ -159,17 +384,25 @@ class RealtimeNoteEffect:
         self.segment_colors = [self.BLACK] * self.num_segments
         self.ba = MultiByteArray(self.num_leds, self.leds_per_segment)
 
+        # FPS tracking variables using deque with max size
+        fps_history = deque(maxlen=self.MAX_HISTORY_SIZE)
+        active_fps_history = deque(maxlen=self.MAX_HISTORY_SIZE)
+        total_frames = 0
+        active_frames = 0
+
         loop_i = 0
         last_frame_time = time.time()
 
         while True:
             frame_start_time = time.time()
+            is_active_frame = False
 
             if self.state == 'SLEEP':
                 time.sleep(0.01)
             elif self.state == 'STOP':
                 break
             else:
+                is_active_frame = True
                 # look at note onset times, update colors as necessary
                 t = time.time()
                 for i in range(len(self.note_onsets)):
@@ -177,30 +410,42 @@ class RealtimeNoteEffect:
                         continue
                     else:
                         delta = t - self.note_onsets[i]
-                        if delta > self.NOTE_DECAY_S:
+                        if delta > self.note_decay_s:
                             self.note_onsets[i] = -1
                             self.ba.set_segment(i, self.BLACK)
                         else:
-                            delta_pct = 1.0 - (delta / self.NOTE_DECAY_S)
-                            c = [int(255 * x) for x in colorsys.hsv_to_rgb(1.0, 1.0, delta_pct)]
+                            delta_pct = (delta / self.note_decay_s)
+                            c = self.color_animation(self.hues[i], delta_pct, peak_position=0.3)
                             self.ba.set_segment(i, c)
 
                 # send bytearray(s)
                 try:
                     for msg in self.ba:
-                        self.clientSock.sendto(msg, (self.ip_address, self.UDP_PORT_NO))
+                        self.clientSock.sendto(msg, (self.ip_address, self.udp_port))
                 except (socket.error, BlockingIOError) as e:
                     print(f"Socket error: {e}")
 
-            # check for messages every CHECK_INTERVAL loops
-            if (loop_i % self.CHECK_INTERVAL) == 0:
-                if child_conn.poll():
-                    msg = child_conn.recv()
-                    # handle message
-                    if msg[0] == 'STATE':
-                        self.state = msg[1]
-                    elif msg[0] == 'NOTE':
-                        self.note_onsets[msg[1]] = time.time()
+            # check for messages
+            if child_conn.poll():
+                msg = child_conn.recv()
+                # handle message
+                if msg[0] == 'STATE':
+                    self.state = msg[1]
+                elif msg[0] == 'NOTE':
+                    self.note_onsets[msg[1]] = time.time()
+                elif msg[0] == 'FPS':
+                    self.max_fps = msg[1]
+                    self.frame_time = 1.0 / self.max_fps
+                elif msg[0] == 'GET_FPS_STATS':
+                    # Calculate and send FPS statistics
+                    stats = {
+                        'avg_fps': statistics.mean(active_fps_history) if active_fps_history else 0,
+                        'min_fps': min(active_fps_history) if active_fps_history else 0,
+                        'max_fps': max(active_fps_history) if active_fps_history else 0,
+                        'active_frames': active_frames,
+                        'total_frames': total_frames
+                    }
+                    child_conn.send(('FPS_STATS', stats))
 
             # Calculate how long this frame took
             frame_end_time = time.time()
@@ -211,11 +456,16 @@ class RealtimeNoteEffect:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-            # Calculate actual FPS for debugging if needed
+            # Calculate actual FPS for this frame
             actual_frame_time = time.time() - frame_start_time
             actual_fps = 1.0 / actual_frame_time if actual_frame_time > 0 else 0
 
-            print(actual_fps)
+            # Track FPS statistics
+            fps_history.append(actual_fps)
+            if is_active_frame:
+                active_fps_history.append(actual_fps)
+                active_frames += 1
+            total_frames += 1
 
             loop_i += 1
 
@@ -235,27 +485,57 @@ class RealtimeNoteEffect:
         self.frame_time = 1.0 / self.max_fps
         self.parent_conn.send(('FPS', self.max_fps))
 
+def getch():
+    """Get a single character from the user without requiring Enter to be pressed"""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
 # Example usage
 if __name__ == "__main__":
     # Example parameters
-    hostname = "wled-lamp.local"
-    colors = [(255, 0, 0), (0, 255, 0)]  # RGB colors for each segment
-    leds_per_segment = 20
+    hostname = os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
+    udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
+    hues = [0.0, 0.2, 0.4, 0.6, 0.8]  # Evenly spaced hues
+    leds_per_segment = 16
 
-    effect = RealtimeNoteEffect(hostname, colors, leds_per_segment)
+    effect = RealtimeNoteEffect(hostname, udp_port, hues, leds_per_segment)
+    print(f"UDP Port: {effect.udp_port}")
+    print(f"Note Decay: {effect.note_decay_s}s")
+    print(f"Max FPS: {effect.max_fps}")
+
     effect.start()
 
     # Set to active state
     effect.set_state('ACTIVE')
 
-    # Simulate some notes
-    import random
+    print("\nInteractive Note Tester")
+    print("======================")
+    print("Press SPACE to trigger a random note")
+    print("Press any other key to exit")
+
     try:
-        for _ in range(2):
-            note_idx = _
+        note_idx = 0
+        while True:
+            note_idx = (note_idx + 1) % len(hues)
+
+            print(f"Triggering note {note_idx} (hue: {hues[note_idx]:.2f})")
             effect.send_note(note_idx)
-            time.sleep(1.5)
+
+            # Wait for key press
+            print("Press SPACE for another note or any other key to exit...")
+            key = getch()
+
+            # Exit if not space
+            if key != ' ':
+                print("Exiting...")
+                break
     except KeyboardInterrupt:
-        pass
+        print("\nInterrupted by user")
     finally:
         effect.stop()
