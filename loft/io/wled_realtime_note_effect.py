@@ -221,7 +221,7 @@ class MultiByteArray:
             self.data[pos + 1] = color[1]
             self.data[pos + 2] = color[2]
 
-class RealtimeNoteEffect:
+class WLEDRealtimeNoteEffect:
     # Default values for configuration (used if not in .env)
     BLACK = (0, 0, 0)
     MAX_HISTORY_SIZE = 1000  # Maximum number of FPS samples to keep
