@@ -11,7 +11,7 @@ import neopixel
 
 from dotenv import load_dotenv
 
-from .io import NoteListener, Rotary, SerialInterface, ControlAnimator
+from .io import NoteListener, Rotary, SerialInterface, ControlAnimator, WLEDRealtimeNoteEffect
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'DEBUG').upper()
@@ -31,11 +31,14 @@ class Main:
         self.notes = os.getenv("NOTES", "").split(',')
         self.segment_colors = [-1] * len(self.notes)
 
-        # pregenerate colors that note-playing will cycle through
-        self.colors = []
+        # pregenerate hues that note-playing will cycle through
+        self.note_hues = []
         color_steps = int(os.getenv("NOTE_COLOR_STEPS", 7))
-        for i in range(color_steps):
-            self.colors.append([int(x * 255) for x in colorsys.hsv_to_rgb(i / color_steps, 1.0, 1.0)])
+        hue_increment = 1.0 / color_steps
+        current_hue = 0.0
+        for i in range(len(self.notes)):
+            self.note_hues.append(current_hue)
+            current_hue += hue_increment
 
         # load enabled fx
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -72,6 +75,11 @@ class Main:
         self.led_count = self.state['info']['leds']['count']
         self.leds_per_segment = int(self.led_count / len(self.notes))
 
+        # realtime effect manager
+        hues = list(range(0, 1.0, 1.0 / len(self.notes)))
+        self.note_mode_output = WLEDRealtimeNoteEffect(os.getenv('WLED_HOSTNAME'), os.getenv('WLED_UDP_PORT'), hues=self.note_hues, leds_per_segment=self.leds_per_segment)
+        self.note_mode_output.start()
+
         # connect inputs
         self.encoder_a = Rotary('A', self.encoder_button_press, self.encoder_button_hold, self.encoder_rotate, *self._scalarize(os.getenv("ENCODER_PINS_A")), float(os.getenv("ENCODER_BUTTON_HOLD_TIME", 0.5)))
 
@@ -84,19 +92,19 @@ class Main:
         self.send_color()
 
     def set_mode(self, mode):
-        if mode == self.mode:
+        last_mode = self.mode
+        if mode == last_mode:
             return
 
         logging.debug(f'setting mode to {mode}')
         self.mode = mode
 
         if self.mode == 'NOTE':
-            # set up segments, blank them, resend their state to the WLED
-            self.segment_colors = [-1] * len(self.segment_colors)
-            self.set_segment_mode(True)
-            self.send_segments()
+            self.note_mode_output.set_state('ACTIVE')
         else:
-            self.set_segment_mode(False)
+            if last_mode == 'NOTE':
+                self.note_mode_output.set_state('SLEEP')
+
             if self.mode == 'SOLID':
                 self.fx = 0
                 self.send_fx()
@@ -124,25 +132,8 @@ class Main:
     def _scalarize(self, x):
         return [int(y.strip()) for y in x.split(',')]
 
-    # erase all segment data so we can manipulate the whole LED array.
-    # the segments will be recreated when notes arrive.
-    def set_segment_mode(self, segment_mode):
-        if self.segment_mode != segment_mode:
-            self.segment_mode = segment_mode
-
-            if not self.segment_mode:
-                # erase segments
-                seg = []
-                for i in range(1, len(self.notes) + 1):
-                    seg.append({"id": i, "start": 1, "stop": 0 })
-                self.wled.send_json_message({"seg": seg})
-            else:
-                # no need to set up segment 0, it's always there
-                pass
-
     def set_power_state(self, power_state):
         self.power_on = power_state
-        #control_color = [0, 0, 0] if self.power_on else [0.7, 0.2, 0.3]
         animation = self.control_animator.get_solid_color_hsv([0, 0, 0])
         if not self.power_on:
             animation[2] = [5, 0, 0]
@@ -158,7 +149,6 @@ class Main:
             self.set_power_state(not self.power_on)
 
         self.log_command((f'HOLD', time.time(), encoder_name))
-
 
     def encoder_button_press(self, encoder_name):
         logging.debug(f'button - {encoder_name}')
@@ -193,21 +183,7 @@ class Main:
 
         if note in self.notes:
             note_index = len(self.notes) - (self.notes.index(note) + 1)
-            self.segment_colors[note_index] = (self.segment_colors[note_index] + 1) % len(self.colors)
-            self.send_segments(note_index)
-
-    def send_segments(self, segment_index=None):
-        if segment_index is None:
-            segments = range(len(self.notes))
-        else:
-            segments = [segment_index]
-
-        segs = []
-        for i in segments:
-            c = (self.segment_colors[i] < 0) and [0, 0, 0] or self.colors[self.segment_colors[i]]
-            segs.append({"id": i + 1, "start": self.leds_per_segment * i, "stop": self.leds_per_segment * (i + 1), "col": [c]})
-
-        self.wled.send_json_message({"tt": 0, "seg": segs})
+            self.note_mode_output.send_note(note_index % len(self.note_hues))
 
     def send_fx(self):
         self.wled.send_json_message({"tt": 0, "seg": [{"id": 0, "fx": self.fx}]})
