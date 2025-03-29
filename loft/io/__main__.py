@@ -23,6 +23,7 @@ import glob
 import logging
 import argparse
 import threading
+import signal
 from collections import defaultdict
 from importlib import import_module
 from sklearn.ensemble import RandomForestClassifier
@@ -76,6 +77,7 @@ def train_model(labelled_files):
     print(classification_report(y_test, preds))
     joblib.dump(clf, MODEL_PATH)
     print(f"Model saved to {MODEL_PATH}")
+
 def train_command(args):
     """Train a model using collected audio samples."""
     try:
@@ -160,13 +162,13 @@ def collect_command(args):
     try:
         import pyaudio
         import wave
-        from pynput import keyboard
     except ImportError as e:
         logger.error(f"Missing dependencies for data collection: {e}")
-        logger.error("Install required packages with: pip install pyaudio wave pynput")
+        logger.error("Install required packages with: pip install pyaudio wave")
         return 1
 
     logger.info("Starting audio collection...")
+    logger.info("Press Ctrl+C to stop recording early")
 
     training_data_directory = os.getenv('TRAINING_DATA_DIRECTORY')
     if not training_data_directory:
@@ -194,50 +196,46 @@ def collect_command(args):
     )
 
     logger.info(f"Recording {record_seconds} seconds of audio for label '{args.label}'")
-    logger.info("Press 'ESC' to stop recording early")
-
-    # Variable to track if ESC was pressed
-    stop_early = False
-
-    # Key press handler
-    def on_press(key):
-        nonlocal stop_early
-        if key == keyboard.Key.esc:
-            stop_early = True
-            return False  # Stop listener
-
-    # Start key listener in a separate thread
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
 
     # Record data
     frames = []
     start_time = time.time()
+    stop_early = False
+
+    # Set up signal handler for Ctrl+C
+    def signal_handler(sig, frame):
+        nonlocal stop_early
+        stop_early = True
+        logger.info("\nRecording stopped early")
+
+    # Register the signal handler
+    original_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal_handler)
 
     try:
+        # Record until duration is reached or Ctrl+C is pressed
         while time.time() - start_time < record_seconds and not stop_early:
-            data = stream.read(buffer_size)
+            data = stream.read(buffer_size, exception_on_overflow=False)
             frames.append(data)
 
-            # Show progress
-            progress = (time.time() - start_time) / record_seconds * 100
-            sys.stdout.write(f"\rRecording: {progress:.1f}%")
-            sys.stdout.flush()
+            # Show progress (update every 0.2 seconds to reduce output)
+            current_time = time.time()
+            if int((current_time - start_time) * 5) > int((current_time - start_time - 0.1) * 5):
+                progress = (current_time - start_time) / record_seconds * 100
+                sys.stdout.write(f"\rRecording: {progress:.1f}%")
+                sys.stdout.flush()
 
-        if stop_early:
-            logger.info("\nRecording stopped early")
     except Exception as e:
         logger.error(f"Error during recording: {e}")
         return 1
     finally:
+        # Restore original signal handler
+        signal.signal(signal.SIGINT, original_handler)
+
         # Stop and close the stream
         stream.stop_stream()
         stream.close()
         p.terminate()
-
-        # Make sure the listener is stopped
-        if listener.is_alive():
-            listener.stop()
 
     # Generate filename with timestamp
     timestamp = int(time.time())
@@ -263,15 +261,14 @@ def calibrate_command(args):
     try:
         import pyaudio
         import numpy as np
-        from pynput import keyboard
     except ImportError as e:
         logger.error(f"Missing dependencies for calibration: {e}")
-        logger.error("Install required packages with: pip install pyaudio numpy pynput")
+        logger.error("Install required packages with: pip install pyaudio numpy")
         return 1
 
     logger.info("Starting audio calibration...")
     logger.info("Make noise at the levels you want to detect")
-    logger.info("Press 'ESC' to stop calibration")
+    logger.info("Press Ctrl+C to stop calibration")
 
     # Audio settings
     sample_rate = int(os.getenv('SAMPLE_RATE', '44100'))
@@ -298,26 +295,22 @@ def calibrate_command(args):
         db = 20 * np.log10(volume / 1.0)
         return max(-100, min(0, db))
 
-    # Variable to track if ESC was pressed
-    stop_calibration = False
-
-    # Key press handler
-    def on_press(key):
-        nonlocal stop_calibration
-        if key == keyboard.Key.esc:
-            stop_calibration = True
-            return False  # Stop listener
-
-    # Start key listener in a separate thread
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
-
     # Collect volume data
     volume_data = []
 
     # Track when we last updated the display
     last_display_update = time.time()
     display_interval = 0.5  # Update display every 0.5 seconds
+
+    # Set up signal handler for Ctrl+C
+    stop_calibration = False
+    def signal_handler(sig, frame):
+        nonlocal stop_calibration
+        stop_calibration = True
+
+    # Register the signal handler
+    original_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal_handler)
 
     try:
         while not stop_calibration:
@@ -337,17 +330,17 @@ def calibrate_command(args):
                 last_display_update = current_time
 
     except Exception as e:
-        logger.error(f"Error during calibration: {e}")
-        return 1
+        if not stop_calibration:  # Don't show error for normal Ctrl+C termination
+            logger.error(f"Error during calibration: {e}")
+            return 1
     finally:
+        # Restore original signal handler
+        signal.signal(signal.SIGINT, original_handler)
+
         # Stop and close the stream
         stream.stop_stream()
         stream.close()
         p.terminate()
-
-        # Make sure the listener is stopped
-        if listener.is_alive():
-            listener.stop()
 
     if volume_data:
         min_db = min(volume_data)
@@ -405,25 +398,13 @@ def test_realtime_command(args):
 
         print("\nInteractive Note Tester")
         print("======================")
-        print("Press 1-{} to trigger notes".format(num_segments))
-        print("Press 'q' to exit")
-
-        # Function to get a key press without requiring Enter
-        def get_key():
-            import termios
-            import tty
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            try:
-                tty.setraw(fd)
-                ch = sys.stdin.read(1)
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return ch
+        print(f"Enter a number (1-{num_segments}) to trigger a note")
+        print("Press Ctrl+C or enter 'q' to exit")
 
         try:
             while True:
-                key = get_key()
+                # Use Python's built-in input function
+                key = input("Enter note number (or 'q' to quit): ").strip()
 
                 # Quit on 'q'
                 if key.lower() == 'q':
@@ -436,9 +417,11 @@ def test_realtime_command(args):
                     if 0 <= note_idx < num_segments:
                         print(f"Triggering note {note_idx} (hue: {hues[note_idx]:.2f})")
                         effect.send_note(note_idx)
+                    else:
+                        print(f"Note number must be between 1 and {num_segments}")
                 except ValueError:
-                    # Not a number, ignore
-                    pass
+                    if key:  # Only show error if input wasn't empty
+                        print("Please enter a valid number or 'q' to quit")
         except KeyboardInterrupt:
             print("\nInterrupted by user")
         finally:
