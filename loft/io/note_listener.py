@@ -11,7 +11,7 @@ import aubio
 import joblib
 
 from dotenv import load_dotenv
-dotenv.load_dotenv()
+load_dotenv()
 
 class NoteListener:
     def __init__(self, min_volume, callback):
