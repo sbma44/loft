@@ -22,12 +22,12 @@ import time
 import glob
 import logging
 import argparse
+import threading
 from collections import defaultdict
 from importlib import import_module
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
-
 
 import numpy as np
 from dotenv import load_dotenv
@@ -160,10 +160,10 @@ def collect_command(args):
     try:
         import pyaudio
         import wave
-        import keyboard
+        from pynput import keyboard
     except ImportError as e:
         logger.error(f"Missing dependencies for data collection: {e}")
-        logger.error("Install required packages with: pip install pyaudio wave keyboard")
+        logger.error("Install required packages with: pip install pyaudio wave pynput")
         return 1
 
     logger.info("Starting audio collection...")
@@ -196,16 +196,26 @@ def collect_command(args):
     logger.info(f"Recording {record_seconds} seconds of audio for label '{args.label}'")
     logger.info("Press 'ESC' to stop recording early")
 
+    # Variable to track if ESC was pressed
+    stop_early = False
+
+    # Key press handler
+    def on_press(key):
+        nonlocal stop_early
+        if key == keyboard.Key.esc:
+            stop_early = True
+            return False  # Stop listener
+
+    # Start key listener in a separate thread
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+
     # Record data
     frames = []
     start_time = time.time()
 
     try:
-        while time.time() - start_time < record_seconds:
-            if keyboard.is_pressed('esc'):
-                logger.info("Recording stopped early")
-                break
-
+        while time.time() - start_time < record_seconds and not stop_early:
             data = stream.read(buffer_size)
             frames.append(data)
 
@@ -213,6 +223,9 @@ def collect_command(args):
             progress = (time.time() - start_time) / record_seconds * 100
             sys.stdout.write(f"\rRecording: {progress:.1f}%")
             sys.stdout.flush()
+
+        if stop_early:
+            logger.info("\nRecording stopped early")
     except Exception as e:
         logger.error(f"Error during recording: {e}")
         return 1
@@ -221,6 +234,10 @@ def collect_command(args):
         stream.stop_stream()
         stream.close()
         p.terminate()
+
+        # Make sure the listener is stopped
+        if listener.is_alive():
+            listener.stop()
 
     # Generate filename with timestamp
     timestamp = int(time.time())
@@ -246,10 +263,10 @@ def calibrate_command(args):
     try:
         import pyaudio
         import numpy as np
-        import keyboard
+        from pynput import keyboard
     except ImportError as e:
         logger.error(f"Missing dependencies for calibration: {e}")
-        logger.error("Install required packages with: pip install pyaudio numpy keyboard")
+        logger.error("Install required packages with: pip install pyaudio numpy pynput")
         return 1
 
     logger.info("Starting audio calibration...")
@@ -281,25 +298,44 @@ def calibrate_command(args):
         db = 20 * np.log10(volume / 1.0)
         return max(-100, min(0, db))
 
+    # Variable to track if ESC was pressed
+    stop_calibration = False
+
+    # Key press handler
+    def on_press(key):
+        nonlocal stop_calibration
+        if key == keyboard.Key.esc:
+            stop_calibration = True
+            return False  # Stop listener
+
+    # Start key listener in a separate thread
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+
     # Collect volume data
     volume_data = []
 
-    try:
-        while True:
-            if keyboard.is_pressed('esc'):
-                break
+    # Track when we last updated the display
+    last_display_update = time.time()
+    display_interval = 0.5  # Update display every 0.5 seconds
 
-            data = stream.read(buffer_size)
+    try:
+        while not stop_calibration:
+            # Read audio data without blocking
+            data = stream.read(buffer_size, exception_on_overflow=False)
             db_level = get_volume_db(data)
             volume_data.append(db_level)
 
-            # Show current level
-            bar_length = 50
-            bar = '=' * int((db_level + 100) * bar_length / 100)
-            sys.stdout.write(f"\rLevel: {db_level:.1f} dB [{bar.ljust(bar_length)}]")
-            sys.stdout.flush()
+            # Only update the display periodically
+            current_time = time.time()
+            if current_time - last_display_update >= display_interval:
+                # Show current level
+                bar_length = 50
+                bar = '=' * int((db_level + 100) * bar_length / 100)
+                sys.stdout.write(f"\rLevel: {db_level:.1f} dB [{bar.ljust(bar_length)}]")
+                sys.stdout.flush()
+                last_display_update = current_time
 
-            time.sleep(0.05)
     except Exception as e:
         logger.error(f"Error during calibration: {e}")
         return 1
@@ -308,6 +344,10 @@ def calibrate_command(args):
         stream.stop_stream()
         stream.close()
         p.terminate()
+
+        # Make sure the listener is stopped
+        if listener.is_alive():
+            listener.stop()
 
     if volume_data:
         min_db = min(volume_data)
@@ -465,4 +505,4 @@ def main():
         return 1
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

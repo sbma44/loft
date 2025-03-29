@@ -274,6 +274,8 @@ class WLEDRealtimeNoteEffect:
         self._running = False
         self.avg_fps = 0
 
+        self.state = 'SLEEP'
+
     def start(self):
         """Start the effect processing in a separate process"""
         if not self._running:
@@ -377,8 +379,6 @@ class WLEDRealtimeNoteEffect:
         self.clientSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.clientSock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
         self.clientSock.setblocking(False)  # Non-blocking mode
-
-        self.state = 'SLEEP'
 
         self.note_onsets = [-1] * self.num_segments
         self.segment_colors = [self.BLACK] * self.num_segments
