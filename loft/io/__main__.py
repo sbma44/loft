@@ -364,73 +364,46 @@ def calibrate_command(args):
 
 def test_realtime_command(args):
     """Test the realtime note effect."""
-    try:
-        # Try to import from wled_realtime_note_effect, but fall back to realtime_note_effect if needed
-        try:
-            from .wled_realtime_note_effect import WLEDRealtimeNoteEffect as RealtimeNoteEffect
-        except ImportError:
-            try:
-                from .realtime_note_effect import RealtimeNoteEffect
-            except ImportError:
-                logger.error("Could not import RealtimeNoteEffect class")
-                return 1
+    from .wled_realtime_note_effect import WLEDRealtimeNoteEffect as RealtimeNoteEffect
 
-        # Get hostname from args or environment
-        hostname = args.hostname if hasattr(args, 'hostname') else os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
-        udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
 
-        # Create some evenly spaced hues based on the number of segments
-        num_segments = args.segments if hasattr(args, 'segments') else 5
-        hues = [i/num_segments for i in range(num_segments)]
-        leds_per_segment = args.leds_per_segment if hasattr(args, 'leds_per_segment') else 16
+    # Get hostname from args or environment
+    hostname = args.hostname if hasattr(args, 'hostname') else os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
+    udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
 
-        logger.info(f"Testing realtime note effect with {num_segments} segments")
-        logger.info(f"Hostname: {hostname}, UDP Port: {udp_port}")
+    # Create some evenly spaced hues based on the number of segments
+    led_count = int(os.getenv('TOTAL_LEDS'))
+    notes = os.getenv("NOTES", "").split(',')
+    note_colors = [float(x) for x in os.getenv('NOTE_COLORS').split(',')]
+    num_segments = int(os.getenv('NUM_SEGMENTS'))
 
-        # Create and start the effect
-        effect = RealtimeNoteEffect(hostname, udp_port, hues, leds_per_segment)
-        logger.info(f"UDP Port: {effect.udp_port}")
-        logger.info(f"Note Decay: {effect.note_decay_s}s")
-        logger.info(f"Max FPS: {effect.max_fps}")
+    logger.info(f"Testing realtime note effect with {num_segments} segments")
+    logger.info(f"Hostname: {hostname}, UDP Port: {udp_port}")
 
-        effect.start()
-        effect.set_state('ACTIVE')
+    # Create and start the effect
+    effect = RealtimeNoteEffect(hostname, udp_port, colors, num_segments, leds_per_segment)
+    logger.info(f"UDP Port: {effect.udp_port}")
+    logger.info(f"Note Decay: {effect.note_decay_s}s")
+    logger.info(f"Max FPS: {effect.max_fps}")
 
-        print("\nInteractive Note Tester")
-        print("======================")
-        print(f"Enter a number (1-{num_segments}) to trigger a note")
-        print("Press Ctrl+C or enter 'q' to exit")
+    effect.start()
+    effect.set_state('ACTIVE')
 
-        try:
-            while True:
-                # Use Python's built-in input function
-                key = input("Enter note number (or 'q' to quit): ").strip()
+    print("\nInteractive Note Tester")
+    print("======================")
+    print(f"Enter a number (1-{num_segments}) to trigger a note")
+    print("Press Ctrl+C or enter 'q' to exit")
 
-                # Quit on 'q'
-                if key.lower() == 'q':
-                    print("\nExiting...")
-                    break
+    for i in range(len(notes)):
+        effect.send_note(i)
+        time.sleep(0.25)
+    time.sleep(0.5)
+    for i in range(len(notes)-1, 0, -1):
+        effect.send_note(i)
+        time.sleep(0.25)
 
-                # Try to convert key to a segment index (1-based input, 0-based index)
-                try:
-                    note_idx = int(key) - 1
-                    if 0 <= note_idx < num_segments:
-                        print(f"Triggering note {note_idx} (hue: {hues[note_idx]:.2f})")
-                        effect.send_note(note_idx)
-                    else:
-                        print(f"Note number must be between 1 and {num_segments}")
-                except ValueError:
-                    if key:  # Only show error if input wasn't empty
-                        print("Please enter a valid number or 'q' to quit")
-        except KeyboardInterrupt:
-            print("\nInterrupted by user")
-        finally:
-            effect.stop()
+    effect.stop()
 
-        return 0
-    except Exception as e:
-        logger.error(f"Error in test-realtime command: {e}", exc_info=True)
-        return 1
 
 def show_help():
     """Show the help message."""

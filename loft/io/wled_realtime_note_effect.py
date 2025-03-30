@@ -15,12 +15,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-def color_animation(hue, progress, peak_position=0.2):
+def color_animation(color, progress, peak_position=0.2):
     """
     Generate an RGB color for an animation that transitions from white to a fully saturated color to black.
 
     Args:
-        hue (float): The hue value (0.0-1.0) for the color
+        color (float): The hue value (0.0-1.0) for the color, or a negative value for white
         progress (float): The progress through the animation (0.0-1.0)
         peak_position (float): The position in the animation where the fully saturated color appears (0.0-1.0)
 
@@ -43,6 +43,10 @@ def color_animation(hue, progress, peak_position=0.2):
     peak_position = max(0.01, min(0.99, peak_position))
 
     if progress < peak_position:
+        # negative values: just white
+        if color < 0:
+            return (255, 255, 255)
+
         # Phase 1: White to fully saturated color
         # Calculate how far we are in this phase (0.0 to 1.0)
         phase_progress = progress / peak_position
@@ -62,7 +66,12 @@ def color_animation(hue, progress, peak_position=0.2):
         phase_progress = (progress - peak_position) / (1 - peak_position)
 
         # Convert the target hue to RGB
-        target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+        if color < 0:
+            target_r = 255
+            target_g = 255
+            target_b = 255
+        else:
+            target_r, target_g, target_b = [int(255 * x) for x in colorsys.hsv_to_rgb(color, 1.0, 1.0)]
 
         # Interpolate from the target color to black (0, 0, 0)
         r = int(target_r * (1 - phase_progress))
@@ -226,13 +235,14 @@ class WLEDRealtimeNoteEffect:
     BLACK = (0, 0, 0)
     MAX_HISTORY_SIZE = 1000  # Maximum number of FPS samples to keep
 
-    def __init__(self, hostname, udp_port, hues, leds_per_segment, max_fps=None):
+    def __init__(self, hostname, udp_port, colors, num_segments, leds_per_segment, max_fps=None):
         """
         Initialize the realtime note effect.
 
         Args:
             hostname: The hostname or IP address of the WLED device
-            hues: List of hue values (0.0-1.0) for each segment
+            colors: List of hue values (0.0-1.0) or negative for white for each segment
+            num_segments: total number of segments
             leds_per_segment: Number of LEDs per segment
             max_fps: Maximum frames per second (overrides env value if provided)
         """
@@ -258,12 +268,12 @@ class WLEDRealtimeNoteEffect:
             print(f"Could not resolve hostname: {hostname}")
 
         # Validate hues
-        for hue in hues:
-            if not 0 <= hue <= 1.0:
-                raise ValueError(f"Hue value {hue} is outside the valid range of 0.0-1.0")
+        for color in colors:
+            if not 0 <= math.abs(color) <= 1.0:
+                raise ValueError(f"Hue value {hue} is outside the valid range of -1.0-1.0")
 
-        self.hues = hues
-        self.num_segments = len(self.hues)
+        self.colors = colors
+        self.num_segments = num_segments
         self.leds_per_segment = leds_per_segment
         self.num_leds = self.num_segments * self.leds_per_segment
 
@@ -402,7 +412,7 @@ class WLEDRealtimeNoteEffect:
             elif self.state == 'STOP':
                 break
             else:
-                is_active_frame = True
+                s_active_frame = True
                 # look at note onset times, update colors as necessary
                 t = time.time()
                 for i in range(len(self.note_onsets)):
@@ -415,7 +425,7 @@ class WLEDRealtimeNoteEffect:
                             self.ba.set_segment(i, self.BLACK)
                         else:
                             delta_pct = (delta / self.note_decay_s)
-                            c = self.color_animation(self.hues[i], delta_pct, peak_position=0.3)
+                            c = self.color_animation(self.segment_colors[i], delta_pct, peak_position=0.3)
                             self.ba.set_segment(i, c)
 
                 # send bytearray(s)
@@ -432,7 +442,9 @@ class WLEDRealtimeNoteEffect:
                 if msg[0] == 'STATE':
                     self.state = msg[1]
                 elif msg[0] == 'NOTE':
-                    self.note_onsets[msg[1]] = time.time()
+                    segment_index = msg[1] % len(self.note_onsets)
+                    self.segment_colors[segment_index] = self.colors[msg[1]]
+                    self.note_onsets[segment_index] = time.time()
                 elif msg[0] == 'FPS':
                     self.max_fps = msg[1]
                     self.frame_time = 1.0 / self.max_fps
@@ -499,12 +511,17 @@ def getch():
 # Example usage
 if __name__ == "__main__":
     # Example parameters
-    hostname = os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
+    hostname = os.getenv('WLED_HOSTNAME', 'wled-loft.local')
     udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
-    hues = [0.0, 0.2, 0.4, 0.6, 0.8]  # Evenly spaced hues
-    leds_per_segment = 16
 
-    effect = RealtimeNoteEffect(hostname, udp_port, hues, leds_per_segment)
+    notes = os.getenv("NOTES", "").split(',')
+    note_colors = [float(x) for x in os.getenv('NOTE_COLORS').split(',')]
+
+    segment_count = int(os.getenv('NUM_SEGMENTS'))
+    total_leds = int(os.getenv('TOTAL_LEDS'))
+    leds_per_segment = total_leds / segment_count
+
+    effect = RealtimeNoteEffect(hostname, udp_port, note_colors, segment_count, leds_per_segment)
     print(f"UDP Port: {effect.udp_port}")
     print(f"Note Decay: {effect.note_decay_s}s")
     print(f"Max FPS: {effect.max_fps}")
@@ -522,9 +539,9 @@ if __name__ == "__main__":
     try:
         note_idx = 0
         while True:
-            note_idx = (note_idx + 1) % len(hues)
+            note_idx = (note_idx + 1) % len(notes)
 
-            print(f"Triggering note {note_idx} (hue: {hues[note_idx]:.2f})")
+            print(f"Triggering note {note_idx} (color: {note_colors[note_idx]:.2f})")
             effect.send_note(note_idx)
 
             # Wait for key press

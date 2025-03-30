@@ -25,20 +25,10 @@ class Main:
 
         self.command_queue = collections.deque([], maxlen=50)
         self.mode = None
-        self.segment_mode = False
 
         # set up notes, array to track state of each segment
         self.notes = os.getenv("NOTES", "").split(',')
-        self.segment_colors = [-1] * len(self.notes)
-
-        # pregenerate hues that note-playing will cycle through
-        self.note_hues = []
-        color_steps = int(os.getenv("NOTE_COLOR_STEPS", 7))
-        hue_increment = 1.0 / color_steps
-        current_hue = 0.0
-        for i in range(len(self.notes)):
-            self.note_hues.append(current_hue)
-            current_hue += hue_increment
+        self.note_colors = [float(x) for x in os.getenv('NOTE_COLORS').split(',')]
 
         # load enabled fx
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +41,7 @@ class Main:
                     self.enabled_fx.append(int(fx_i))
 
         # connect outputs
-        self.led = neopixel.NeoPixel(getattr(board, os.getenv("LED_PIN")), int(os.getenv("LED_LENGTH")))
+        self.led = neopixel.NeoPixel(getattr(board, os.getenv("ENCODER_LED_PIN")), int(os.getenv("ENCODER_LED_LENGTH")))
         self.wled = SerialInterface(os.getenv("SERIAL_PORT"), os.getenv("SERIAL_BAUD"), self.state_callback)
         self.control_animator = ControlAnimator(self.led)
 
@@ -72,7 +62,7 @@ class Main:
         self.hue = 0
         self.hue_increment = float(os.getenv('HUE_INCREMENT', 0.05))
         self.fx = self.state['state']['seg'][0]['fx']
-        self.led_count = self.state['info']['leds']['count']
+        self.led_count = int(os.getenv('TOTAL_LEDS', self.state['info']['leds']['count']))
         self.leds_per_segment = int(self.led_count / len(self.notes))
 
         # realtime effect manager
