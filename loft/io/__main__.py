@@ -394,7 +394,7 @@ def test_realtime_command(args):
         max_fps = int(os.getenv('MAX_FPS', '30'))  # Lower default FPS
 
         # Create and start the effect
-        effect = RealtimeNoteEffect(hostname, udp_port, note_colors, leds_per_segment, max_fps=max_fps)
+        effect = RealtimeNoteEffect(hostname, udp_port, note_colors, num_segments, leds_per_segment, max_fps=max_fps)
 
         # Log configuration
         logger.info(f"UDP Port: {effect.udp_port}")

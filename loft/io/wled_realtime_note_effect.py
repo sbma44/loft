@@ -248,7 +248,7 @@ class WLEDRealtimeNoteEffect:
         """
         # Load configuration from environment variables
         self.udp_port = udp_port
-        self.note_decay_s = float(os.getenv('NOTE_DECAY_S', '3.0'))
+        self.note_decay_s = float(os.getenv('NOTE_DECAY_S', '1.0'))
 
         # Allow max_fps to be overridden by parameter, otherwise use env value
         if max_fps is None:
