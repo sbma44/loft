@@ -273,9 +273,9 @@ class WLEDRealtimeNoteEffect:
                 raise ValueError(f"Hue value {hue} is outside the valid range of -1.0-1.0")
 
         self.colors = colors
-        self.num_segments = num_segments
-        self.leds_per_segment = leds_per_segment
-        self.num_leds = self.num_segments * self.leds_per_segment
+        self.num_segments = int(num_segments)
+        self.leds_per_segment = int(leds_per_segment)
+        self.num_leds = int(self.num_segments * self.leds_per_segment)
 
         # Create a pipe for bidirectional communication
         self.parent_conn, self.child_conn = multiprocessing.Pipe()
