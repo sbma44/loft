@@ -269,7 +269,7 @@ class WLEDRealtimeNoteEffect:
 
         # Validate hues
         for color in colors:
-            if not 0 <= math.abs(color) <= 1.0:
+            if not 0 <= abs(color) <= 1.0:
                 raise ValueError(f"Hue value {hue} is outside the valid range of -1.0-1.0")
 
         self.colors = colors

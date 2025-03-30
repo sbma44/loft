@@ -381,18 +381,13 @@ def test_realtime_command(args):
     logger.info(f"Hostname: {hostname}, UDP Port: {udp_port}")
 
     # Create and start the effect
-    effect = RealtimeNoteEffect(hostname, udp_port, colors, num_segments, leds_per_segment)
+    effect = RealtimeNoteEffect(hostname, udp_port, note_colors, num_segments, led_count / num_segments)
     logger.info(f"UDP Port: {effect.udp_port}")
     logger.info(f"Note Decay: {effect.note_decay_s}s")
     logger.info(f"Max FPS: {effect.max_fps}")
 
     effect.start()
     effect.set_state('ACTIVE')
-
-    print("\nInteractive Note Tester")
-    print("======================")
-    print(f"Enter a number (1-{num_segments}) to trigger a note")
-    print("Press Ctrl+C or enter 'q' to exit")
 
     for i in range(len(notes)):
         effect.send_note(i)
