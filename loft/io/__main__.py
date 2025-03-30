@@ -364,41 +364,82 @@ def calibrate_command(args):
 
 def test_realtime_command(args):
     """Test the realtime note effect."""
-    from .wled_realtime_note_effect import WLEDRealtimeNoteEffect as RealtimeNoteEffect
+    try:
+        from .wled_realtime_note_effect import WLEDRealtimeNoteEffect as RealtimeNoteEffect
 
+        # Get hostname from args or environment
+        hostname = args.hostname if hasattr(args, 'hostname') else os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
+        udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
 
-    # Get hostname from args or environment
-    hostname = args.hostname if hasattr(args, 'hostname') else os.getenv('WLED_HOSTNAME', 'wled-lamp.local')
-    udp_port = int(os.getenv('WLED_UDP_PORT', '21324'))
+        # Create some evenly spaced hues based on the number of segments
+        led_count = int(os.getenv('TOTAL_LEDS', '150'))  # Add default fallback
+        notes = os.getenv("NOTES", "C4,C#4,D4,D#4,E4,F4,F#4,G4,G#4,A4,A#4,B4").split(',')
 
-    # Create some evenly spaced hues based on the number of segments
-    led_count = int(os.getenv('TOTAL_LEDS'))
-    notes = os.getenv("NOTES", "").split(',')
-    note_colors = [float(x) for x in os.getenv('NOTE_COLORS').split(',')]
-    num_segments = int(os.getenv('NUM_SEGMENTS'))
+        # Check if NOTE_COLORS env var exists, otherwise create even distribution
+        note_colors_env = os.getenv('NOTE_COLORS')
+        if note_colors_env:
+            note_colors = [float(x) for x in note_colors_env.split(',')]
+        else:
+            # Create evenly distributed hues
+            note_colors = [i/len(notes) for i in range(len(notes))]
 
-    logger.info(f"Testing realtime note effect with {num_segments} segments")
-    logger.info(f"Hostname: {hostname}, UDP Port: {udp_port}")
+        num_segments = int(os.getenv('NUM_SEGMENTS', str(len(notes))))
+        leds_per_segment = int(led_count / num_segments)
 
-    # Create and start the effect
-    effect = RealtimeNoteEffect(hostname, udp_port, note_colors, num_segments, led_count / num_segments)
-    logger.info(f"UDP Port: {effect.udp_port}")
-    logger.info(f"Note Decay: {effect.note_decay_s}s")
-    logger.info(f"Max FPS: {effect.max_fps}")
+        logger.info(f"Testing realtime note effect with {num_segments} segments")
+        logger.info(f"Hostname: {hostname}, UDP Port: {udp_port}")
+        logger.info(f"Total LEDs: {led_count}, LEDs per segment: {leds_per_segment}")
 
-    effect.start()
-    effect.set_state('ACTIVE')
+        # Reduce default FPS to avoid overwhelming socket
+        max_fps = int(os.getenv('MAX_FPS', '30'))  # Lower default FPS
 
-    for i in range(len(notes)):
-        effect.send_note(i)
-        time.sleep(0.25)
-    time.sleep(0.5)
-    for i in range(len(notes)-1, 0, -1):
-        effect.send_note(i)
-        time.sleep(0.25)
+        # Create and start the effect
+        effect = RealtimeNoteEffect(hostname, udp_port, note_colors, leds_per_segment, max_fps=max_fps)
 
-    effect.stop()
+        # Log configuration
+        logger.info(f"UDP Port: {effect.udp_port}")
+        logger.info(f"Note Decay: {effect.note_decay_s}s")
+        logger.info(f"Max FPS: {effect.max_fps}")
 
+        effect.start()
+        effect.set_state('ACTIVE')
+
+        print("\nRunning note sequence demo...")
+
+        try:
+            # Ascending scale
+            print("Running ascending scale...")
+            for i in range(min(len(notes), num_segments)):
+                logger.info(f"Triggering note {i+1} (hue: {note_colors[i]:.2f})")
+                effect.send_note(i)
+                time.sleep(0.3)  # Slightly longer delay to reduce socket load
+
+            time.sleep(1.0)  # Longer pause between sequences
+
+            # Descending scale
+            print("Running descending scale...")
+            for i in range(min(len(notes), num_segments)-1, -1, -1):
+                logger.info(f"Triggering note {i+1} (hue: {note_colors[i]:.2f})")
+                effect.send_note(i)
+                time.sleep(0.3)  # Slightly longer delay to reduce socket load
+
+            # Pause to let the last note decay
+            print("\nDemo complete. Shutting down in 3 seconds...")
+            time.sleep(3.0)
+
+        except KeyboardInterrupt:
+            print("\nTest interrupted by user")
+        except Exception as e:
+            logger.error(f"Error during demo: {e}")
+        finally:
+            print("Stopping effect...")
+            effect.stop()
+            print("Done!")
+
+        return 0
+    except Exception as e:
+        logger.error(f"Error in test-realtime command: {e}", exc_info=True)
+        return 1
 
 def show_help():
     """Show the help message."""

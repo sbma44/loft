@@ -315,6 +315,13 @@ class WLEDRealtimeNoteEffect:
                         print(f"  Max FPS: {fps_stats['max_fps']:.2f}")
                         print(f"  Active frames: {fps_stats['active_frames']}")
                         print(f"  Total frames: {fps_stats['total_frames']}")
+                        # Add packet statistics for diagnostics
+                        if 'packets_sent' in fps_stats and 'packets_dropped' in fps_stats:
+                            print(f"  Packets sent: {fps_stats['packets_sent']}")
+                            print(f"  Packets dropped: {fps_stats['packets_dropped']}")
+                            if fps_stats['packets_sent'] + fps_stats['packets_dropped'] > 0:
+                                drop_rate = fps_stats['packets_dropped'] / (fps_stats['packets_sent'] + fps_stats['packets_dropped']) * 100
+                                print(f"  Packet drop rate: {drop_rate:.2f}%")
                         self.avg_fps = fps_stats['avg_fps']
 
             # Send stop signal
@@ -400,6 +407,22 @@ class WLEDRealtimeNoteEffect:
         total_frames = 0
         active_frames = 0
 
+        # Socket error management
+        error_backoff = 0.001  # Initial backoff time (1ms)
+        max_backoff = 0.1      # Maximum backoff time (100ms)
+        consecutive_errors = 0
+        max_consecutive_errors = 10  # After this many consecutive errors, we'll log a warning
+        last_error_time = 0
+
+        # Packet buffering to handle temporary socket unavailability
+        packet_queue = deque(maxlen=10)  # Buffer up to 10 frames if socket is busy
+        last_packet_send_time = 0
+        min_packet_interval = 0.002  # Minimum 2ms between packets to avoid overwhelming the socket
+
+        # Track the number of packets we've successfully sent vs dropped
+        packets_sent = 0
+        packets_dropped = 0
+
         loop_i = 0
         last_frame_time = time.time()
 
@@ -409,10 +432,14 @@ class WLEDRealtimeNoteEffect:
 
             if self.state == 'SLEEP':
                 time.sleep(0.01)
+                # Clear packet queue in sleep state to avoid sending stale frames when resuming
+                packet_queue.clear()
+
             elif self.state == 'STOP':
                 break
+
             else:
-                s_active_frame = True
+                is_active_frame = True
                 # look at note onset times, update colors as necessary
                 t = time.time()
                 for i in range(len(self.note_onsets)):
@@ -428,12 +455,67 @@ class WLEDRealtimeNoteEffect:
                             c = self.color_animation(self.segment_colors[i], delta_pct, peak_position=0.3)
                             self.ba.set_segment(i, c)
 
-                # send bytearray(s)
-                try:
-                    for msg in self.ba:
-                        self.clientSock.sendto(msg, (self.ip_address, self.udp_port))
-                except (socket.error, BlockingIOError) as e:
-                    print(f"Socket error: {e}")
+                # Add the current frame packets to the queue
+                frame_packets = list(self.ba)
+                if frame_packets:
+                    packet_queue.append(frame_packets)
+
+                # Process the packet queue with rate limiting
+                current_time = time.time()
+
+                # Only attempt to send packets if we're not in backoff
+                if current_time - last_error_time > error_backoff:
+                    # If we have packets and enough time has passed since last send
+                    if packet_queue and current_time - last_packet_send_time > min_packet_interval:
+                        # Get the oldest frame's packets
+                        packets = packet_queue.popleft()
+
+                        # Try to send all packets for this frame
+                        sent_all = True
+                        for msg in packets:
+                            try:
+                                self.clientSock.sendto(msg, (self.ip_address, self.udp_port))
+                                packets_sent += 1
+                                last_packet_send_time = time.time()  # Update after each successful send
+
+                                # If successful, reset the error counter and backoff
+                                consecutive_errors = 0
+                                error_backoff = 0.001
+
+                                # Add a small delay between packets to avoid overwhelming the socket
+                                time.sleep(min_packet_interval)
+
+                            except (socket.error, BlockingIOError) as e:
+                                # Put the remaining packets back at the front of the queue if possible
+                                if len(packet_queue) < packet_queue.maxlen:
+                                    remaining_packets = packets[packets.index(msg):]
+                                    packet_queue.appendleft(remaining_packets)
+                                else:
+                                    # If queue is full, we'll have to drop packets
+                                    packets_dropped += len(packets) - packets.index(msg)
+
+                                # Update error tracking
+                                consecutive_errors += 1
+                                last_error_time = time.time()
+
+                                # Apply exponential backoff
+                                error_backoff = min(max_backoff, error_backoff * 2)
+
+                                if consecutive_errors >= max_consecutive_errors:
+                                    print(f"Socket error: {e} - backing off for {error_backoff:.3f}s")
+                                    print(f"Packets sent: {packets_sent}, dropped: {packets_dropped}")
+                                    # Reset counter after logging
+                                    consecutive_errors = 0
+
+                                # Exit the for loop since we couldn't send this packet
+                                sent_all = False
+                                break
+
+                        # If the queue is getting full, drop the oldest frame to avoid stale data
+                        if len(packet_queue) >= packet_queue.maxlen * 0.8:
+                            if packet_queue:
+                                old_frame = packet_queue.popleft()
+                                packets_dropped += len(old_frame)
 
             # check for messages
             if child_conn.poll():
@@ -455,7 +537,9 @@ class WLEDRealtimeNoteEffect:
                         'min_fps': min(active_fps_history) if active_fps_history else 0,
                         'max_fps': max(active_fps_history) if active_fps_history else 0,
                         'active_frames': active_frames,
-                        'total_frames': total_frames
+                        'total_frames': total_frames,
+                        'packets_sent': packets_sent,
+                        'packets_dropped': packets_dropped
                     }
                     child_conn.send(('FPS_STATS', stats))
 
@@ -521,7 +605,7 @@ if __name__ == "__main__":
     total_leds = int(os.getenv('TOTAL_LEDS'))
     leds_per_segment = total_leds / segment_count
 
-    effect = RealtimeNoteEffect(hostname, udp_port, note_colors, segment_count, leds_per_segment)
+    effect = WLEDRealtimeNoteEffect(hostname, udp_port, note_colors, segment_count, leds_per_segment)
     print(f"UDP Port: {effect.udp_port}")
     print(f"Note Decay: {effect.note_decay_s}s")
     print(f"Max FPS: {effect.max_fps}")
