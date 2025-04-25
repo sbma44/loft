@@ -66,8 +66,15 @@ class Main:
         self.leds_per_segment = int(self.led_count / len(self.notes))
 
         # realtime effect manager
-        hues = list(range(0, 1.0, 1.0 / len(self.notes)))
-        self.note_mode_output = WLEDRealtimeNoteEffect(os.getenv('WLED_HOSTNAME'), os.getenv('WLED_UDP_PORT'), hues=self.note_hues, leds_per_segment=self.leds_per_segment)
+        # Check if NOTE_COLORS env var exists, otherwise create even distribution
+        note_colors_env = os.getenv('NOTE_COLORS')
+        if note_colors_env:
+            self.note_hues = [float(x) for x in note_colors_env.split(',')]
+        else:
+            # Create evenly distributed hues
+            self.note_hues = [i / (len(self.notes) - 1) for i in range(len(self.notes))]
+        num_segments = int(os.getenv('NUM_SEGMENTS', str(len(self.notes))))
+        self.note_mode_output = WLEDRealtimeNoteEffect(os.getenv('WLED_HOSTNAME'), os.getenv('WLED_UDP_PORT'), note_hues=self.note_hues, num_segments=num_segments, leds_per_segment=self.leds_per_segment)
         self.note_mode_output.start()
 
         # connect inputs

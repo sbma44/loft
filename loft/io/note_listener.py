@@ -15,9 +15,6 @@ load_dotenv()
 
 class NoteListener:
     def __init__(self, min_volume, callback):
-        # initialise pyaudio
-        self.start_audio()
-
         self.min_volume = min_volume
         self.callback = callback
 
@@ -26,6 +23,9 @@ class NoteListener:
         self.n_channels = 1
         self.samplerate = int(os.getenv('SAMPLE_RATE', 44100))
         self.instrument_listen_threshold = float(os.getenv('INSTRUMENT_LISTEN_THRESHOLD', 3.0))
+
+        # initialise pyaudio
+        self.start_audio()
 
         # setup pitch
         tolerance = 0.8

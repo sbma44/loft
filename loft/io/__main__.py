@@ -378,10 +378,10 @@ def test_realtime_command(args):
         # Check if NOTE_COLORS env var exists, otherwise create even distribution
         note_colors_env = os.getenv('NOTE_COLORS')
         if note_colors_env:
-            note_colors = [float(x) for x in note_colors_env.split(',')]
+            note_hues = [float(x) for x in note_colors_env.split(',')]
         else:
             # Create evenly distributed hues
-            note_colors = [i/len(notes) for i in range(len(notes))]
+            note_hues = [i/len(notes) for i in range(len(notes))]
 
         num_segments = int(os.getenv('NUM_SEGMENTS', str(len(notes))))
         leds_per_segment = int(led_count / num_segments)
@@ -394,7 +394,7 @@ def test_realtime_command(args):
         max_fps = int(os.getenv('MAX_FPS', '30'))  # Lower default FPS
 
         # Create and start the effect
-        effect = RealtimeNoteEffect(hostname, udp_port, note_colors, num_segments, leds_per_segment, max_fps=max_fps)
+        effect = RealtimeNoteEffect(hostname, udp_port, note_hues, num_segments, leds_per_segment, max_fps=max_fps)
 
         # Log configuration
         logger.info(f"UDP Port: {effect.udp_port}")

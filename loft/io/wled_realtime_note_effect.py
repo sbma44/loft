@@ -235,7 +235,7 @@ class WLEDRealtimeNoteEffect:
     BLACK = (0, 0, 0)
     MAX_HISTORY_SIZE = 1000  # Maximum number of FPS samples to keep
 
-    def __init__(self, hostname, udp_port, colors, num_segments, leds_per_segment, max_fps=None):
+    def __init__(self, hostname, udp_port, note_hues, num_segments, leds_per_segment, max_fps=None):
         """
         Initialize the realtime note effect.
 
@@ -268,11 +268,11 @@ class WLEDRealtimeNoteEffect:
             print(f"Could not resolve hostname: {hostname}")
 
         # Validate hues
-        for color in colors:
-            if not 0 <= abs(color) <= 1.0:
+        for hue in note_hues:
+            if not 0 <= abs(hue) <= 1.0:
                 raise ValueError(f"Hue value {hue} is outside the valid range of -1.0-1.0")
 
-        self.colors = colors
+        self.colors = note_hues
         self.num_segments = int(num_segments)
         self.leds_per_segment = int(leds_per_segment)
         self.num_leds = int(self.num_segments * self.leds_per_segment)
