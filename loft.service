@@ -1,0 +1,14 @@
+[Unit]
+Description=Loft Python Script
+After=network.target
+
+[Service]
+ExecStart=/home/sbma44/loft/.venv/bin/python3 -m loft
+WorkingDirectory=/home/sbma44/loft
+Restart=always
+User=sbma44
+Group=sbma44
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
